@@ -23,6 +23,32 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
+    const db = client.db('EstateHive')
+    const userCollection = db.collection('users')
+    const propertyCollection = db.collection('properties')
+
+    //save and update a user in db
+    // app.post('/users/:email', async(req,res)=>{
+    //   const email = req.params.email;
+    //   const query = {email}
+    //   const user = req.body
+    //   //check user exists in db
+    //   const isExist = await userCollection.findOne(query)
+    //   if(isExist){
+    //     return res.send(isExist)
+    //   }
+
+    //   const result = await userCollection.insertOne({...user, timestamp: Date.now()})
+    //   res.send(result)
+    // })
+
+    //save a property in db
+    app.post('/addProperty', async(req,res)=>{
+      const property = req.body;
+      const result = await propertyCollection.insertOne(property)
+      res.send(result)
+    })
+
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();
     // Send a ping to confirm a successful connection
