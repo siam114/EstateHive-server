@@ -1,6 +1,8 @@
 require('dotenv').config()
 const express = require('express');
 const app = express();
+const jwt = require("jsonwebtoken");
+const bodyParser = require("body-parser");
 const cors= require('cors');
 const port = process.env.PORT || 5000;
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
@@ -8,6 +10,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 //middleware
 app.use(cors());
 app.use(express.json());
+app.use(bodyParser.json());
 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.2iff3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -25,27 +28,64 @@ async function run() {
   try {
     const db = client.db('EstateHive')
     const userCollection = db.collection('users')
+    const reviewCollection = db.collection('reviews')
     const propertyCollection = db.collection('properties')
 
-    //save and update a user in db
-    // app.post('/users/:email', async(req,res)=>{
-    //   const email = req.params.email;
-    //   const query = {email}
-    //   const user = req.body
-    //   //check user exists in db
-    //   const isExist = await userCollection.findOne(query)
-    //   if(isExist){
-    //     return res.send(isExist)
-    //   }
+    //middleware
+    const verifyToken = (req,res,next) =>{
+      if(!req.headers.authorization){
+        return res.status(401).send({message: 'Forbidden Access'})
+      }
+      const token = req.headers.authorization.split(' ')[1]
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err,decoded) =>{
+        if(err){
+          return res.status(401).send({message: 'Forbidden Access'})
+        }
+        req.decoded = decoded;
+        next()
+      })
+    }
 
-    //   const result = await userCollection.insertOne({...user, timestamp: Date.now()})
-    //   res.send(result)
-    // })
+   //save or update a user in db
+   app.post('/auth/register', async(req,res)=>{
+    const user = req.body;
+    try{
+      //check if user exists in db
+    const isExist = await userCollection.findOne({email: user.email})
+    if(isExist){
+      return res.status(401).send({message: 'User already exist'})
+    }
+    const payload = {...user, role: 'USER', create_at: new Date()}
+    const result = await userCollection.insertOne(payload)
+     // Generate a token
+     const token = jwt.sign({...payload,_id: result.insertedId}, process.env.ACCESS_TOKEN_SECRET, { expiresIn: "30day" });
+     return res.status(200).json({...payload,_id: result.insertedId, token });
+    
+    }catch(err){
+      console.log("🚀 ~ app.post ~ err:", err)
+      
+    }
+  })
+
+    app.post('/user/:email', async(req,res)=>{
+     try{
+      const email = req.params.email
+      const query = {email}
+      const result = await userCollection.findOne(query)
+
+          // Generate a token
+          const token = jwt.sign(result, process.env.ACCESS_TOKEN_SECRET, { expiresIn: "30day" });
+          return res.status(200).json({...result, token });
+     }catch(err){
+      console.log("🚀 ~ app.post ~ err:", err)   
+     }
+      
+    })
 
     //save a property in db
     app.post('/addProperty', async(req,res)=>{
-      const property = req.body;
-      const result = await propertyCollection.insertOne(property)
+      const payload = {...req.body, agent_id: new ObjectId(req.body.agent_id)}
+      const result = await propertyCollection.insertOne(payload)
       res.send(result)
     })
 
