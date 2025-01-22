@@ -205,6 +205,53 @@ async function run() {
       }
     });
 
+    // Get reviews by specific ID
+    app.get("/reviews/:property_id", async (req, res) => {
+      try {
+        const property_id = req.params.property_id;
+
+        // Validate property_id
+        if (!ObjectId.isValid(property_id)) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Invalid property ID." });
+        }
+
+        // Query reviews
+        const reviews = await reviewCollection
+          .aggregate([
+            { $match: { property_id: new ObjectId(property_id) } },
+            {
+              $lookup: {
+                from: "users",
+                localField: "user_id",
+                foreignField: "_id",
+                as: "user",
+              },
+            },
+            { $unwind: "$user" },
+            {
+              $project: {
+                _id: 1,
+                review: 1,
+                createdAt: 1,
+                "user._id": 1,
+                "user.name": 1,
+                "user.image": 1,
+              },
+            },
+          ])
+          .toArray();
+
+        res.send(reviews);
+      } catch (error) {
+        console.error("Error fetching reviews:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error." });
+      }
+    });
+
     //  Get all reviews
     app.get("/reviews", async (req, res) => {
       try {
