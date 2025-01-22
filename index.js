@@ -205,6 +205,53 @@ async function run() {
       }
     });
 
+    //  Get all reviews
+    app.get("/reviews", async (req, res) => {
+      try {
+        const reviews = await reviewCollection
+          .aggregate([
+            {
+              $lookup: {
+                from: "users",
+                localField: "user_id",
+                foreignField: "_id",
+                as: "user",
+              },
+            },
+            { $unwind: "$user" },
+            {
+              $lookup: {
+                from: "properties",
+                localField: "property_id",
+                foreignField: "_id",
+                as: "property",
+              },
+            },
+            { $unwind: "$property" },
+            {
+              $project: {
+                _id: 1,
+                review: 1,
+                createdAt: 1,
+                "user._id": 1,
+                "user.name": 1,
+                "user.image": 1,
+                "property._id": 1,
+                "property.name": 1,
+              },
+            },
+          ])
+          .toArray();
+
+        res.send(reviews);
+      } catch (error) {
+        console.error("Error fetching reviews:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error." });
+      }
+    });
+
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();
     // Send a ping to confirm a successful connection
