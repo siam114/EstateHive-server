@@ -139,42 +139,71 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       // const result = await propertyCollection.findOne(query);
       const result = await propertyCollection
-      .aggregate([
-        {
-          $match: query 
-      },
-        {
-          $lookup: {
-            from: "users",
-            localField: "agent_id",
-            foreignField: "_id",
-            as: "agent",
+        .aggregate([
+          {
+            $match: query,
           },
-        },
-        {
-          $unwind: "$agent",
-        },
-        {
-          $project: {
-            _id: 1,
-            name: 1,
-            description: 1,
-            min_price: 1,
-            max_price: 1,
-            location: 1,
-            image: 1,
-            status: 1,
-            "agent._id": 1,
-            "agent.name": 1,
-            "agent.image": 1,
+          {
+            $lookup: {
+              from: "users",
+              localField: "agent_id",
+              foreignField: "_id",
+              as: "agent",
+            },
           },
-        },
-      ])
-      .toArray();
-      res.send( result.length > 0 ? result[0] : null);
+          {
+            $unwind: "$agent",
+          },
+          {
+            $project: {
+              _id: 1,
+              name: 1,
+              description: 1,
+              min_price: 1,
+              max_price: 1,
+              location: 1,
+              image: 1,
+              status: 1,
+              "agent._id": 1,
+              "agent.name": 1,
+              "agent.image": 1,
+            },
+          },
+        ])
+        .toArray();
+      res.send(result.length > 0 ? result[0] : null);
     });
 
-    //review api
+    //  Add a new review
+    app.post("/add-review", async (req, res) => {
+      try {
+        const { user_id, property_id, review } = req.body;
+
+        // Validate request
+        if (!user_id || !property_id || !review) {
+          return res
+            .status(400)
+            .json({ success: false, message: "All fields are required." });
+        }
+
+        // Create review object
+        const newReview = {
+          user_id: new ObjectId(user_id),
+          property_id: new ObjectId(property_id),
+          review,
+          createdAt: new Date(),
+        };
+
+        // Insert into database
+        const result = await reviewCollection.insertOne(newReview);
+        res.send(result);
+      } catch (error) {
+        console.error("Error adding review:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error." });
+      }
+    });
 
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();
