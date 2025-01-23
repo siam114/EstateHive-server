@@ -45,6 +45,20 @@ async function run() {
       });
     };
 
+   //get all users
+   app.get('/users', async(req,res)=>{
+    const result = await userCollection.find().toArray()
+    res.send(result);
+   })
+
+   //admin deleted user
+   app.delete('/users/:id', async(req,res)=>{
+    const id= req.params.id
+    const query = {_id: new ObjectId(id)}
+    const result = await userCollection.deleteOne(query)
+    res.send(result);
+   })
+
     //save or update a user in db
     app.post("/auth/register", async (req, res) => {
       const user = req.body;
