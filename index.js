@@ -29,48 +29,119 @@ async function run() {
     const userCollection = db.collection("users");
     const reviewCollection = db.collection("reviews");
     const propertyCollection = db.collection("properties");
+    const wishlistCollection = db.collection("wishlist");
 
     //middleware
     const verifyToken = (req, res, next) => {
-      if (!req.headers.authorization) {
+      if (
+        !req.headers.authorization ||
+        !req.headers.authorization.startsWith("Bearer ")
+      ) {
         return res.status(401).send({ message: "Forbidden Access" });
       }
+
       const token = req.headers.authorization.split(" ")[1];
+      console.log("🚀 ~ verifyToken ~ token:", token);
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        console.log("🚀 ~ jwt.verify ~ decoded:", decoded);
         if (err) {
+          console.log("🚀 ~ jwt.verify ~ error:", err.message);
           return res.status(401).send({ message: "Forbidden Access" });
         }
-        req.decoded = decoded;
+
+        req.user = decoded;
         next();
       });
     };
 
-   //get all users
-   app.get('/users', async(req,res)=>{
-    const result = await userCollection.find().toArray()
-    res.send(result);
-   })
-
-   //admin deleted user
-   app.delete('/users/:id', async(req,res)=>{
-    const id= req.params.id
-    const query = {_id: new ObjectId(id)}
-    const result = await userCollection.deleteOne(query)
-    res.send(result);
-   })
-
-   //create a admin
-   app.patch('/users/admin/:id', async(req,res)=>{
-    const id = req.params.id;
-    const filter= {_id: new ObjectId(id)}
-    const updatedDoc = {
-      $set: {
-        role: 'admin'
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.user.email;
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+      console.log("🚀 ~ verifyAdmin ~ user:", user);
+      const isAdmin = user?.role === "ADMIN";
+      if (!isAdmin) {
+        return res.status(403).send({ message: "Unathorized!" });
       }
-    }
-    const result =await userCollection.updateOne(filter, updatedDoc)
-    res.send(result)
-   })
+      next();
+    };
+
+    const verifyAgent = async (req, res, next) => {
+      const email = req.user.email;
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+      console.log("🚀 ~ verifyAdmin ~ user:", user);
+      const isAgent = user?.role === "AGENT";
+      if (!isAgent) {
+        return res.status(403).send({ message: "Unathorized!" });
+      }
+      next();
+    };
+
+    const verifyUser = async (req, res, next) => {
+      const email = req.user.email;
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+      console.log("🚀 ~ verifyAdmin ~ user:", user);
+      const isUser = user?.role === "USER";
+      if (!isUser) {
+        return res.status(403).send({ message: "Unathorized!" });
+      }
+      next();
+    };
+
+    //get all users
+    app.get("/users", async (req, res) => {
+      const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+
+    //admin deleted user
+    app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await userCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    //create a admin
+    app.patch(
+      "/users/admin/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = {
+          $set: {
+            role: "ADMIN",
+          },
+        };
+        const result = await userCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+      }
+    );
+
+    //get a admin
+    app.get(
+      "/users/admin/:email",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const email = req.params.email;
+        if (email !== req.user.email) {
+          return res.status(403).send({ message: "unauthorized accesss" });
+        }
+
+        const query = { email: email };
+        const user = await userCollection.findOne(query);
+        let admin = false;
+        if (user) {
+          admin = user?.role === "ADMIN";
+        }
+        res.send({ admin });
+      }
+    );
 
     //save or update a user in db
     app.post("/auth/register", async (req, res) => {
@@ -115,7 +186,8 @@ async function run() {
     });
 
     //save a property in db
-    app.post("/addProperty", async (req, res) => {
+    app.post("/addProperty", verifyToken, async (req, res) => {
+      console.log("🚀 ~ app.post ~ req:", req.user);
       const payload = {
         ...req.body,
         agent_id: new ObjectId(req.body.agent_id),
@@ -202,7 +274,7 @@ async function run() {
     });
 
     //  Add a new review
-    app.post("/add-review", async (req, res) => {
+    app.post("/add-review", verifyToken, verifyUser, async (req, res) => {
       try {
         const { user_id, property_id, review } = req.body;
 
@@ -315,7 +387,7 @@ async function run() {
               },
             },
             { $sort: { createdAt: -1 } },
-            { $limit: 3 }, 
+            { $limit: 3 },
           ])
           .toArray();
 
@@ -325,6 +397,42 @@ async function run() {
         res
           .status(500)
           .json({ success: false, message: "Internal server error." });
+      }
+    });
+
+    //add to wishlist
+    app.post("/wishlist", verifyToken, verifyUser, async (req, res) => {
+      const property_id = req.body.property_id;
+      const user_id = req.user._id;
+      if (!user_id || !property_id) {
+        return res.status(400).send({ message: "Invalid Data Provided" });
+      }
+
+      try {
+        const result = await wishlistCollection.updateOne(
+          { user_id: new ObjectId(user_id), property_id: new ObjectId(property_id) },
+          {
+            $setOnInsert: { created_at: new Date() },
+            $set: { updated_at: new Date() },
+          },
+          { upsert: true } 
+        );
+        
+
+        // Response
+        if (result.upsertedCount > 0) {
+          res
+            .status(201)
+            .send({
+              message: "Wishlist item added",
+              upsertedId: result.upsertedId,
+            });
+        } else {
+          res.status(200).send({ message: "Wishlist item updated" });
+        }
+      } catch (err) {
+        console.log("🚀 ~ app.post ~ err:", err)
+        res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
