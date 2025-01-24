@@ -274,7 +274,7 @@ async function run() {
     });
 
     //  Add a new review
-    app.post("/add-review", verifyToken, verifyUser, async (req, res) => {
+    app.post("/add-review", async (req, res) => {
       try {
         const { user_id, property_id, review } = req.body;
 
@@ -400,6 +400,94 @@ async function run() {
       }
     });
 
+// Get reviews by user ID
+app.get("/my-reviews/:user_id", async (req, res) => {
+  try {
+    const user_id = req.params.user_id;
+
+    // Validate user_id
+    if (!ObjectId.isValid(user_id)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid user ID." });
+    }
+
+    // Query reviews by user ID
+    const reviews = await reviewCollection
+      .aggregate([
+        { $match: { user_id: new ObjectId(user_id) } },
+        {
+          $lookup: {
+            from: "properties",
+            localField: "property_id",
+            foreignField: "_id",
+            as: "property",
+          },
+        },
+        { $unwind: "$property" },
+        {
+          $lookup: {
+            from: "users", 
+            localField: "property.agent_id",
+            foreignField: "_id", 
+            as: "agent", 
+          },
+        },
+        { $unwind: "$agent" },
+        {
+          $project: {
+            _id: 1,
+            review: 1,
+            createdAt: 1,
+            "property.name": 1,
+            "agent.name": 1, 
+          },
+        },
+      ])
+      .toArray();
+
+    res.send(reviews);
+  } catch (error) {
+    console.error("Error fetching user's reviews:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Internal server error." });
+  }
+});
+
+
+    // Delete a review by ID
+    app.delete("/delete-review/:id", async (req, res) => {
+      try {
+        const reviewId = req.params.id;
+
+        // Validate review ID
+        if (!ObjectId.isValid(reviewId)) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Invalid review ID." });
+        }
+
+        // Delete the review
+        const result = await reviewCollection.deleteOne({
+          _id: new ObjectId(reviewId),
+        });
+
+        if (result.deletedCount === 0) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Review not found." });
+        }
+
+        res.json({ success: true, message: "Review deleted successfully." });
+      } catch (error) {
+        console.error("Error deleting review:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error." });
+      }
+    });
+
     //add to wishlist
     app.post("/wishlist", verifyToken, verifyUser, async (req, res) => {
       const property_id = req.body.property_id;
@@ -410,28 +498,28 @@ async function run() {
 
       try {
         const result = await wishlistCollection.updateOne(
-          { user_id: new ObjectId(user_id), property_id: new ObjectId(property_id) },
+          {
+            user_id: new ObjectId(user_id),
+            property_id: new ObjectId(property_id),
+          },
           {
             $setOnInsert: { created_at: new Date() },
             $set: { updated_at: new Date() },
           },
-          { upsert: true } 
+          { upsert: true }
         );
-        
 
         // Response
         if (result.upsertedCount > 0) {
-          res
-            .status(201)
-            .send({
-              message: "Wishlist item added",
-              upsertedId: result.upsertedId,
-            });
+          res.status(201).send({
+            message: "Wishlist item added",
+            upsertedId: result.upsertedId,
+          });
         } else {
           res.status(200).send({ message: "Wishlist item updated" });
         }
       } catch (err) {
-        console.log("🚀 ~ app.post ~ err:", err)
+        console.log("🚀 ~ app.post ~ err:", err);
         res.status(500).send({ message: "Internal Server Error" });
       }
     });
