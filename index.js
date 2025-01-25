@@ -122,6 +122,24 @@ async function run() {
       }
     );
 
+        //create a agent
+        app.patch(
+          "/users/agent/:id",
+          verifyToken,
+          verifyAdmin,
+          async (req, res) => {
+            const id = req.params.id;
+            const filter = { _id: new ObjectId(id) };
+            const updatedDoc = {
+              $set: {
+                role: "AGENT",
+              },
+            };
+            const result = await userCollection.updateOne(filter, updatedDoc);
+            res.send(result);
+          }
+        );
+
     //get a admin
     app.get(
       "/users/admin/:email",
@@ -272,7 +290,7 @@ async function run() {
         .toArray();
       res.send(result.length > 0 ? result[0] : null);
     });
-
+    
     //  Add a new review
     app.post("/add-review", async (req, res) => {
       try {
@@ -400,61 +418,60 @@ async function run() {
       }
     });
 
-// Get reviews by user ID
-app.get("/my-reviews/:user_id", async (req, res) => {
-  try {
-    const user_id = req.params.user_id;
+    // Get reviews by user ID
+    app.get("/my-reviews/:user_id", async (req, res) => {
+      try {
+        const user_id = req.params.user_id;
 
-    // Validate user_id
-    if (!ObjectId.isValid(user_id)) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid user ID." });
-    }
+        // Validate user_id
+        if (!ObjectId.isValid(user_id)) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Invalid user ID." });
+        }
 
-    // Query reviews by user ID
-    const reviews = await reviewCollection
-      .aggregate([
-        { $match: { user_id: new ObjectId(user_id) } },
-        {
-          $lookup: {
-            from: "properties",
-            localField: "property_id",
-            foreignField: "_id",
-            as: "property",
-          },
-        },
-        { $unwind: "$property" },
-        {
-          $lookup: {
-            from: "users", 
-            localField: "property.agent_id",
-            foreignField: "_id", 
-            as: "agent", 
-          },
-        },
-        { $unwind: "$agent" },
-        {
-          $project: {
-            _id: 1,
-            review: 1,
-            createdAt: 1,
-            "property.name": 1,
-            "agent.name": 1, 
-          },
-        },
-      ])
-      .toArray();
+        // Query reviews by user ID
+        const reviews = await reviewCollection
+          .aggregate([
+            { $match: { user_id: new ObjectId(user_id) } },
+            {
+              $lookup: {
+                from: "properties",
+                localField: "property_id",
+                foreignField: "_id",
+                as: "property",
+              },
+            },
+            { $unwind: "$property" },
+            {
+              $lookup: {
+                from: "users",
+                localField: "property.agent_id",
+                foreignField: "_id",
+                as: "agent",
+              },
+            },
+            { $unwind: "$agent" },
+            {
+              $project: {
+                _id: 1,
+                review: 1,
+                createdAt: 1,
+                "property.name": 1,
+                "agent.name": 1,
+              },
+            },
+          ])
+          .toArray();
 
-    res.send(reviews);
-  } catch (error) {
-    console.error("Error fetching user's reviews:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Internal server error." });
-  }
-});
-
+        res.send(reviews);
+      } catch (error) {
+        console.error("Error fetching user's reviews:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error." });
+      }
+    });
 
     // Delete a review by ID
     app.delete("/delete-review/:id", async (req, res) => {
