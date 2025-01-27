@@ -4,6 +4,7 @@ const app = express();
 const jwt = require("jsonwebtoken");
 const bodyParser = require("body-parser");
 const cors = require("cors");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 5000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
@@ -140,27 +141,6 @@ async function run() {
       }
     );
 
-    //get a admin
-    app.get(
-      "/users/admin/:email",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        const email = req.params.email;
-        if (email !== req.user.email) {
-          return res.status(403).send({ message: "unauthorized accesss" });
-        }
-
-        const query = { email: email };
-        const user = await userCollection.findOne(query);
-        let admin = false;
-        if (user) {
-          admin = user?.role === "ADMIN";
-        }
-        res.send({ admin });
-      }
-    );
-
     //save or update a user in db
     app.post("/auth/register", async (req, res) => {
       const user = req.body;
@@ -187,7 +167,7 @@ async function run() {
     });
 
     //get user info and jwt token
-    app.post("/user/:email", async (req, res) => {
+    app.get("/user/:email", async (req, res) => {
       try {
         const email = req.params.email;
         const query = { email };
@@ -217,12 +197,17 @@ async function run() {
 
     //get all property in db
     app.get("/properties", async (req, res) => {
+      const status = req.query.status;
       const result = await propertyCollection
         .aggregate([
-          { 
-            $match: { 
-              status: { $ne: "REJECTED" } 
-            } 
+          {
+            $match: !status
+              ? {
+                  status: { $ne: "REJECTED" },
+                }
+              : {
+                  $and: [{ status: { $ne: "REJECTED" } }, { status }],
+                },
           },
           {
             $lookup: {
@@ -248,6 +233,7 @@ async function run() {
               "agent._id": 1,
               "agent.name": 1,
               "agent.image": 1,
+              "agent.email": 1,
             },
           },
         ])
@@ -292,6 +278,83 @@ async function run() {
       res.send(result);
     });
 
+    //patch update property
+    app.patch("/properties/:id", verifyToken, verifyAgent, async (req, res) => {
+      const item = req.body;
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          name: item.name,
+          description: item.description,
+          min_price: item.min_price,
+          max_price: item.max_price,
+          location: item.location,
+          image: item.image,
+        },
+      };
+
+      const result = await propertyCollection.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+
+    // Delete a property by ID (only accessible to the agent who owns the property)
+    app.delete(
+      "/properties/:id",
+      verifyToken,
+      verifyAgent,
+      async (req, res) => {
+        try {
+          const propertyId = req.params.id;
+
+          // Validate the property ID
+          if (!ObjectId.isValid(propertyId)) {
+            return res
+              .status(400)
+              .json({ success: false, message: "Invalid property ID." });
+          }
+
+          // Find the property and check if it belongs to the logged-in agent
+          const property = await propertyCollection.findOne({
+            _id: new ObjectId(propertyId),
+          });
+          if (!property) {
+            return res
+              .status(404)
+              .json({ success: false, message: "Property not found." });
+          }
+
+          if (property.agent_id != req.user._id) {
+            return res.status(403).json({
+              success: false,
+              message: "You are not authorized to delete this property.",
+            });
+          }
+
+          // Delete the property
+          const result = await propertyCollection.deleteOne({
+            _id: new ObjectId(propertyId),
+          });
+          if (result.deletedCount === 0) {
+            return res.status(404).json({
+              success: false,
+              message: "Property not found or already deleted.",
+            });
+          }
+
+          res.json({
+            success: true,
+            message: "Property deleted successfully.",
+          });
+        } catch (error) {
+          console.error("Error deleting property:", error);
+          res
+            .status(500)
+            .json({ success: false, message: "Internal server error." });
+        }
+      }
+    );
+
     //get a property by id
     app.get("/properties/:id", async (req, res) => {
       const id = req.params.id;
@@ -333,6 +396,19 @@ async function run() {
       res.send(result.length > 0 ? result[0] : null);
     });
 
+    //verification post
+    app.post("/verify-property", verifyToken, verifyAdmin, async (req, res) => {
+      const { status, property_id } = req.body;
+      const filter = { _id: new ObjectId(property_id) };
+      const updatedDoc = {
+        $set: {
+          status,
+        },
+      };
+      const result = await propertyCollection.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+
     //  Add a new review
     app.post("/add-review", verifyToken, verifyUser, async (req, res) => {
       try {
@@ -350,7 +426,7 @@ async function run() {
           user_id: new ObjectId(user_id),
           property_id: new ObjectId(property_id),
           review,
-          createdAt: new Date(),
+          created_at: new Date(),
         };
 
         // Insert into database
@@ -364,6 +440,58 @@ async function run() {
       }
     });
 
+    //  Get all reviews
+    app.get("/all-reviews", async (req, res) => {
+      const limit = req.query.limit;
+      const aggregateQuery = [
+        {
+          $lookup: {
+            from: "users",
+            localField: "user_id",
+            foreignField: "_id",
+            as: "user",
+          },
+        },
+        { $unwind: "$user" },
+        {
+          $lookup: {
+            from: "properties",
+            localField: "property_id",
+            foreignField: "_id",
+            as: "property",
+          },
+        },
+        { $unwind: "$property" },
+        {
+          $project: {
+            _id: 1,
+            review: 1,
+            created_at: 1,
+            "user._id": 1,
+            "user.name": 1,
+            "user.image": 1,
+            "property._id": 1,
+            "property.name": 1,
+          },
+        },
+        { $sort: { created_at: -1 } },   
+      ]
+      if(limit){
+        aggregateQuery.push({ $limit: Number(limit) })
+      }
+      try {
+        const reviews = await reviewCollection
+          .aggregate(aggregateQuery)
+          .toArray();
+        console.log("🚀 ~ app.get ~ reviews:", reviews);
+        res.send(reviews);
+      } catch (error) {
+        console.error("Error fetching reviews:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error." });
+      }
+    });
     // Get reviews by specific ID
     app.get("/reviews/:property_id", async (req, res) => {
       try {
@@ -393,61 +521,12 @@ async function run() {
               $project: {
                 _id: 1,
                 review: 1,
-                createdAt: 1,
+                created_at: 1,
                 "user._id": 1,
                 "user.name": 1,
                 "user.image": 1,
               },
             },
-          ])
-          .toArray();
-
-        res.send(reviews);
-      } catch (error) {
-        console.error("Error fetching reviews:", error);
-        res
-          .status(500)
-          .json({ success: false, message: "Internal server error." });
-      }
-    });
-
-    //  Get all reviews
-    app.get("/reviews", verifyToken, async (req, res) => {
-      try {
-        const reviews = await reviewCollection
-          .aggregate([
-            {
-              $lookup: {
-                from: "users",
-                localField: "user_id",
-                foreignField: "_id",
-                as: "user",
-              },
-            },
-            { $unwind: "$user" },
-            {
-              $lookup: {
-                from: "properties",
-                localField: "property_id",
-                foreignField: "_id",
-                as: "property",
-              },
-            },
-            { $unwind: "$property" },
-            {
-              $project: {
-                _id: 1,
-                review: 1,
-                createdAt: 1,
-                "user._id": 1,
-                "user.name": 1,
-                "user.image": 1,
-                "property._id": 1,
-                "property.name": 1,
-              },
-            },
-            { $sort: { createdAt: -1 } },
-            { $limit: 3 },
           ])
           .toArray();
 
@@ -502,7 +581,7 @@ async function run() {
                 $project: {
                   _id: 1,
                   review: 1,
-                  createdAt: 1,
+                  created_at: 1,
                   "property.name": 1,
                   "agent.name": 1,
                 },
@@ -589,10 +668,11 @@ async function run() {
     });
 
     //get to wishlist
-    app.get("/wishlist", async (req, res) => {
+    app.get("/wishlist", verifyToken, verifyUser, async (req, res) => {
       try {
         const reviews = await wishlistCollection
           .aggregate([
+            { $match: { user_id: new ObjectId(req.user._id) } },
             {
               $lookup: {
                 from: "users",
@@ -624,9 +704,10 @@ async function run() {
               $project: {
                 _id: 1,
                 review: 1,
-                createdAt: 1,
+                created_at: 1,
                 "user._id": 1,
                 "user.name": 1,
+                "user.email": 1,
                 "user.image": 1,
                 "property._id": 1,
                 "property.name": 1,
@@ -638,11 +719,11 @@ async function run() {
                 "property.description": 1,
                 "agent._id": 1,
                 "agent.name": 1,
+                "agent.email": 1,
                 "agent.image": 1,
               },
             },
-            { $sort: { createdAt: -1 } },
-            { $limit: 3 },
+            { $sort: { created_at: -1 } },
           ])
           .toArray();
 
@@ -653,6 +734,80 @@ async function run() {
           .status(500)
           .json({ success: false, message: "Internal server error." });
       }
+    });
+
+    //get a wishlist by id
+    app.get("/wishlist/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      // const result = await propertyCollection.findOne(query);
+      const result = await wishlistCollection
+        .aggregate([
+          {
+            $match: query,
+          },
+          {
+            $lookup: {
+              from: "users",
+              localField: "user_id",
+              foreignField: "_id",
+              as: "user",
+            },
+          },
+          { $unwind: "$user" },
+          {
+            $lookup: {
+              from: "properties",
+              localField: "property_id",
+              foreignField: "_id",
+              as: "property",
+            },
+          },
+          { $unwind: "$property" },
+          {
+            $lookup: {
+              from: "users",
+              localField: "property.agent_id",
+              foreignField: "_id",
+              as: "agent",
+            },
+          },
+          { $unwind: "$agent" },
+          {
+            $project: {
+              _id: 1,
+              review: 1,
+              created_at: 1,
+              "user._id": 1,
+              "user.name": 1,
+              "user.email": 1,
+              "user.image": 1,
+              "property._id": 1,
+              "property.name": 1,
+              "property.status": 1,
+              "property.image": 1,
+              "property.location": 1,
+              "property.min_price": 1,
+              "property.max_price": 1,
+              "property.description": 1,
+              "agent._id": 1,
+              "agent.name": 1,
+              "agent.email": 1,
+              "agent.image": 1,
+            },
+          },
+        ])
+        .toArray();
+      res.send(result.length > 0 ? result[0] : null);
+    });
+
+    //delete wishlist
+    app.delete("/wishlist/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await wishlistCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
     });
 
     //make an offer
@@ -667,12 +822,13 @@ async function run() {
           },
           {
             $set: {
-              agent_id: new ObjectId(agent_id),
               offer_amount,
-              status: 'PENDING',
+              status: "PENDING",
               updated_at: new Date(),
             },
             $setOnInsert: {
+              agent_id: new ObjectId(agent_id),
+              buying_date: null,
               create_at: new Date(),
             },
           },
@@ -680,8 +836,8 @@ async function run() {
             upsert: true,
           }
         );
-        res.send(result)
-      } catch(err){
+        res.send(result);
+      } catch (err) {
         console.error("Error fetching reviews:", err);
         res
           .status(500)
@@ -689,13 +845,292 @@ async function run() {
       }
     });
 
+    //get bought property
+    app.get(
+      "/bought-properties",
+      verifyToken,
+      verifyAgent,
+      async (req, res) => {
+        try {
+          console.log("🚀 ~ app.get ~ req.user:", req.user);
+
+          const result = await marketPlaceCollection
+            .aggregate([
+              {
+                $match: {
+                  $and: [
+                    { status: "PAID" },
+                    { agent_id: new ObjectId(req.user._id) },
+                  ],
+                },
+              },
+              {
+                $lookup: {
+                  from: "users",
+                  localField: "agent_id",
+                  foreignField: "_id",
+                  as: "agent",
+                },
+              },
+              {
+                $unwind: {
+                  path: "$agent",
+                  preserveNullAndEmptyArrays: true, // Handle cases where no matching agent is found
+                },
+              },
+              {
+                $lookup: {
+                  from: "users",
+                  localField: "user_id",
+                  foreignField: "_id",
+                  as: "user",
+                },
+              },
+              {
+                $unwind: {
+                  path: "$user",
+                  preserveNullAndEmptyArrays: true, // Handle cases where no matching user is found
+                },
+              },
+              {
+                $lookup: {
+                  from: "properties",
+                  localField: "property_id",
+                  foreignField: "_id",
+                  as: "property",
+                },
+              },
+              {
+                $unwind: {
+                  path: "$property",
+                  preserveNullAndEmptyArrays: true, // Handle cases where no matching property is found
+                },
+              },
+              {
+                $project: {
+                  _id: 1,
+                  created_at: 1,
+                  status: 1,
+                  offer_amount: 1,
+                  transection_id: 1,
+                  buying_date: 1,
+                  "user._id": 1,
+                  "user.name": 1,
+                  "user.email": 1,
+                  "user.image": 1,
+                  "property._id": 1,
+                  "property.name": 1,
+                  "property.image": 1,
+                  "property.location": 1,
+                  "property.min_price": 1,
+                  "property.max_price": 1,
+                  "property.description": 1,
+                  "agent._id": 1,
+                  "agent.name": 1,
+                  "agent.email": 1,
+                  "agent.image": 1,
+                },
+              },
+            ])
+            .toArray();
+
+          console.log("🚀 ~ app.get ~ result:", result);
+          res.status(200).send(result);
+        } catch (error) {
+          console.error("🚀 ~ app.get error:", error);
+          res.status(500).json({
+            success: false,
+            message: "Failed to fetch bought properties.",
+            error: error.message,
+          });
+        }
+      }
+    );
+
+    app.get("/offered-properties", verifyToken, async (req, res) => {
+      try {
+        console.log("🚀 ~ app.get ~ req.user:", req.user);
+
+        const result = await marketPlaceCollection
+          .aggregate([
+            {
+              $match: {
+                $and: [
+                  { status: { $ne: "REJECTED" } },
+                  req.user.role === "USER"
+                    ? { user_id: new ObjectId(req.user._id) }
+                    : { agent_id: new ObjectId(req.user._id) },
+                ],
+              },
+            },
+            {
+              $lookup: {
+                from: "users",
+                localField: "agent_id",
+                foreignField: "_id",
+                as: "agent",
+              },
+            },
+            {
+              $unwind: {
+                path: "$agent",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+            {
+              $lookup: {
+                from: "users",
+                localField: "user_id",
+                foreignField: "_id",
+                as: "user",
+              },
+            },
+            {
+              $unwind: {
+                path: "$user",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+            {
+              $lookup: {
+                from: "properties",
+                localField: "property_id",
+                foreignField: "_id",
+                as: "property",
+              },
+            },
+            {
+              $unwind: {
+                path: "$property",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                created_at: 1,
+                status: 1,
+                offer_amount: 1,
+                transection_id: 1,
+                "user._id": 1,
+                "user.name": 1,
+                "user.email": 1,
+                "user.image": 1,
+                "property._id": 1,
+                "property.name": 1,
+                "property.image": 1,
+                "property.location": 1,
+                "property.min_price": 1,
+                "property.max_price": 1,
+                "property.description": 1,
+                "agent._id": 1,
+                "agent.name": 1,
+                "agent.email": 1,
+                "agent.image": 1,
+              },
+            },
+          ])
+          .toArray();
+
+        console.log("🚀 ~ app.get ~ result:", result);
+        res.status(200).send(result);
+      } catch (error) {
+        console.error("🚀 ~ app.get error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch bought properties.",
+          error: error.message,
+        });
+      }
+    });
+
+    app.patch(
+      "/offered-property/update",
+      verifyToken,
+      verifyAgent,
+      async (req, res) => {
+        const { offerId, status, propertyId } = req.body;
+
+        console.log("Received Data:", { status, offerId });
+
+        try {
+          const result = await marketPlaceCollection.updateOne(
+            { _id: new ObjectId(offerId) },
+            { $set: { status } }
+          );
+          console.log("Update Result:", result);
+
+          if (status === "ACCEPTED") {
+            const rejectResult = await marketPlaceCollection.updateMany(
+              {
+                _id: { $ne: new ObjectId(offerId) },
+                property_id: new ObjectId(propertyId),
+                status: "PENDING",
+              },
+              { $set: { status: "REJECTED" } }
+            );
+            console.log("Rejected Other Offers:", rejectResult);
+          }
+
+          res.status(200).json({ message: `Offer ${status} successfully.` });
+        } catch (error) {
+          console.error("Error in API:", error);
+          res.status(500).json({ error: "Failed to update offer status." });
+        }
+      }
+    );
+
+    //payment intent
+    app.post(
+      "/create-payment-intent",
+      verifyToken,
+      verifyUser,
+      async (req, res) => {
+        const { price } = req.body;
+        const amount = parseInt(price * 100);
+
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amount,
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+
+        res.send({
+          clientSecret: paymentIntent.client_secret,
+        });
+      }
+    );
+
+    //paid status update
+    app.patch("/payment", verifyToken, verifyUser, async (req, res) => {
+      const { transection_id, property_id, offer_id } = req.body;
+      try {
+        const filter = { _id: new ObjectId(offer_id) };
+        const updatedDoc = {
+          $set: {
+            transection_id,
+            status: "PAID",
+            buying_date: new Date(),
+          },
+        };
+        const result = await marketPlaceCollection.updateOne(
+          filter,
+          updatedDoc
+        );
+        res.send(result);
+      } catch (error) {
+        console.error("Error in API:", error);
+        res.status(500).json({ error: "Failed to update payment status." });
+      }
+    });
+
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
