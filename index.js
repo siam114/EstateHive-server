@@ -43,7 +43,6 @@ async function run() {
       }
 
       const token = req.headers.authorization.split(" ")[1];
-      console.log("🚀 ~ verifyToken ~ token:", token);
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
         if (err) {
           console.log("🚀 ~ jwt.verify ~ error:", err.message);
@@ -59,7 +58,6 @@ async function run() {
       const email = req.user.email;
       const query = { email: email };
       const user = await userCollection.findOne(query);
-      console.log("🚀 ~ verifyAdmin ~ user:", user);
       const isAdmin = user?.role === "ADMIN";
       if (!isAdmin) {
         return res.status(403).send({ message: "Unathorized!" });
@@ -71,7 +69,6 @@ async function run() {
       const email = req.user.email;
       const query = { email: email };
       const user = await userCollection.findOne(query);
-      console.log("🚀 ~ verifyAgent ~ user:", user);
       const isAgent = user?.role === "AGENT";
       if (!isAgent) {
         return res.status(403).send({ message: "Unathorized!" });
@@ -83,7 +80,6 @@ async function run() {
       const email = req.user.email;
       const query = { email: email };
       const user = await userCollection.findOne(query);
-      console.log("🚀 ~ verifyUser ~ user:", user);
       const isUser = user?.role === "USER";
       if (!isUser) {
         return res.status(403).send({ message: "Unathorized!" });
@@ -185,7 +181,6 @@ async function run() {
 
     //save a property in db
     app.post("/addProperty", verifyToken, async (req, res) => {
-      console.log("🚀 ~ app.post ~ req:", req.user);
       const payload = {
         ...req.body,
         agent_id: new ObjectId(req.body.agent_id),
@@ -483,7 +478,6 @@ async function run() {
         const reviews = await reviewCollection
           .aggregate(aggregateQuery)
           .toArray();
-        console.log("🚀 ~ app.get ~ reviews:", reviews);
         res.send(reviews);
       } catch (error) {
         console.error("Error fetching reviews:", error);
@@ -852,7 +846,6 @@ async function run() {
       verifyAgent,
       async (req, res) => {
         try {
-          console.log("🚀 ~ app.get ~ req.user:", req.user);
 
           const result = await marketPlaceCollection
             .aggregate([
@@ -934,7 +927,6 @@ async function run() {
             ])
             .toArray();
 
-          console.log("🚀 ~ app.get ~ result:", result);
           res.status(200).send(result);
         } catch (error) {
           console.error("🚀 ~ app.get error:", error);
@@ -949,7 +941,6 @@ async function run() {
 
     app.get("/offered-properties", verifyToken, async (req, res) => {
       try {
-        console.log("🚀 ~ app.get ~ req.user:", req.user);
 
         const result = await marketPlaceCollection
           .aggregate([
@@ -1032,7 +1023,6 @@ async function run() {
           ])
           .toArray();
 
-        console.log("🚀 ~ app.get ~ result:", result);
         res.status(200).send(result);
       } catch (error) {
         console.error("🚀 ~ app.get error:", error);
@@ -1050,8 +1040,6 @@ async function run() {
       verifyAgent,
       async (req, res) => {
         const { offerId, status, propertyId } = req.body;
-
-        console.log("Received Data:", { status, offerId });
 
         try {
           const result = await marketPlaceCollection.updateOne(
